@@ -85,10 +85,56 @@ def breadth_first_search(env: DeepCoreEnv) -> Optional[SearchMetrics]:
 # 2. Depth-First Search (DFS) & Iterative Deepening Search (IDS) — [STUDENT TODO]
 # =============================================================================
 def depth_first_search(env: DeepCoreEnv, max_expansions: Optional[int] = None) -> Optional[SearchMetrics]:
-    """TODO: Implement Depth-First Graph Search using a LIFO Stack."""
-    raise NotImplementedError
+    """Depth-First Graph Search using a LIFO Stack with duplicate/cycle checking."""
+    metrics = SearchMetrics(algorithm_name="DFS")
+    start = env.get_initial_state()
+    if env.is_goal(start):
+        metrics.solved = True
+        return metrics
 
 
+    frontier: List[DeepCoreState] = [start]
+    frontier_set: Set[DeepCoreState] = {start}
+    explored: Set[DeepCoreState] = set()
+    parent: Dict[DeepCoreState, Tuple[Optional[DeepCoreState], Optional[str]]] = {start: (None, None)}
+    cost_so_far: Dict[DeepCoreState, int] = {start: 0}
+
+    while frontier:
+        metrics.max_frontier_size = max(metrics.max_frontier_size, len(frontier))
+        metrics.max_memory_size = max(metrics.max_memory_size, len(frontier) + len(explored))
+
+
+        if max_expansions is not None and metrics.nodes_expanded >= max_expansions:
+            metrics.status_message = "Expansion limit reached."
+            return metrics
+
+
+        state = frontier.pop()
+        frontier_set.discard(state)
+
+        explored.add(state)
+        metrics.nodes_expanded += 1
+        metrics.explored_order.append(state.bot_pos)
+
+        for action, next_state, step_cost in reversed(env.get_successors(state)):
+            metrics.nodes_generated += 1
+            if next_state not in explored and next_state not in frontier_set:
+                parent[next_state] = (state, action.value)
+                cost_so_far[next_state] = cost_so_far[state] + step_cost
+
+                if env.is_goal(next_state):
+                    metrics.solved = True
+                    metrics.solution_actions = _reconstruct_path(parent, next_state)
+                    metrics.total_cost = cost_so_far[next_state]
+                    return metrics
+
+                frontier.append(next_state)
+                frontier_set.add(next_state)
+                metrics.max_frontier_size = max(metrics.max_frontier_size, len(frontier))
+                metrics.max_memory_size = max(metrics.max_memory_size, len(frontier) + len(explored))
+
+    metrics.status_message = "No solution found."
+    return metrics
 def iterative_deepening_search(
     env: DeepCoreEnv,
     max_depth: Optional[int] = None,
