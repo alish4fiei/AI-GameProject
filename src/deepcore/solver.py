@@ -229,11 +229,110 @@ def iterative_deepening_search(
 # 3. Bidirectional Search — [STUDENT TODO]
 # =============================================================================
 def bidirectional_search(env: DeepCoreEnv) -> Optional[SearchMetrics]:
-    """
-    TODO: Implement Bidirectional Search expanding forward from `env.get_initial_state()`
-    via `env.get_successors(s)` and backward from `env.get_goal_states()` via `env.get_predecessors(s)`.
-    """
-    raise NotImplementedError
+
+
+    metrics = SearchMetrics(algorithm_name="Bidirectional")
+    start = env.get_initial_state()
+    if env.is_goal(start):
+        metrics.solved = True
+        return metrics
+
+
+    fwd_queue: deque[DeepCoreState] = deque([start])
+    fwd_parent: Dict[DeepCoreState, Tuple[Optional[DeepCoreState], Optional[str]]] = {start: (None, None)}
+    fwd_depth: Dict[DeepCoreState, int] = {start: 0}
+    fwd_cost: Dict[DeepCoreState, int] = {start: 0}
+
+
+    chasm_boulder_diff = len(start.chasms) - len(start.boulders)
+    bwd_queue: deque[DeepCoreState] = deque()
+    bwd_next: Dict[DeepCoreState, Tuple[Optional[DeepCoreState], Optional[str]]] = {}
+    bwd_depth: Dict[DeepCoreState, int] = {}
+    bwd_cost: Dict[DeepCoreState, int] = {}
+
+    for g_state in env.get_goal_states():
+
+        if (
+            len(g_state.chasms) - len(g_state.boulders) == chasm_boulder_diff
+            and len(g_state.boulders) <= len(start.boulders)
+            and len(g_state.chasms) <= len(start.chasms)
+            and g_state.rubble.issubset(start.rubble)
+        ):
+            if g_state not in bwd_depth:
+                bwd_queue.append(g_state)
+                bwd_next[g_state] = (None, None)
+                bwd_depth[g_state] = 0
+                bwd_cost[g_state] = 0
+
+    def _build_meeting_solution(meet_state: DeepCoreState) -> SearchMetrics:
+
+        fwd_actions = _reconstruct_path(fwd_parent, meet_state)
+        bwd_actions: List[str] = []
+        curr: Optional[DeepCoreState] = meet_state
+        while curr is not None:
+            nxt, act = bwd_next.get(curr, (None, None))
+            if act is not None:
+                bwd_actions.append(act)
+            curr = nxt
+
+        metrics.solved = True
+        metrics.solution_actions = fwd_actions + bwd_actions
+        metrics.total_cost = fwd_cost[meet_state] + bwd_cost[meet_state]
+        return metrics
+
+    while fwd_queue:
+        metrics.max_frontier_size = max(metrics.max_frontier_size, len(fwd_queue) + len(bwd_queue))
+        metrics.max_memory_size = max(metrics.max_memory_size, len(fwd_depth) + len(bwd_depth))
+
+        if not bwd_queue or len(fwd_queue) <= len(bwd_queue):
+            layer_size = len(fwd_queue)
+            for _ in range(layer_size):
+                state = fwd_queue.popleft()
+                metrics.nodes_expanded += 1
+                metrics.explored_order.append(state.bot_pos)
+
+                for action, next_state, step_cost in env.get_successors(state):
+                    metrics.nodes_generated += 1
+                    if next_state not in fwd_depth:
+                        fwd_parent[next_state] = (state, action.value)
+                        fwd_depth[next_state] = fwd_depth[state] + 1
+                        fwd_cost[next_state] = fwd_cost[state] + step_cost
+
+                        if env.is_goal(next_state):
+                            metrics.solved = True
+                            metrics.solution_actions = _reconstruct_path(fwd_parent, next_state)
+                            metrics.total_cost = fwd_cost[next_state]
+                            return metrics
+
+                        if next_state in bwd_depth:
+                            return _build_meeting_solution(next_state)
+
+                        fwd_queue.append(next_state)
+                        metrics.max_frontier_size = max(metrics.max_frontier_size, len(fwd_queue) + len(bwd_queue))
+                        metrics.max_memory_size = max(metrics.max_memory_size, len(fwd_depth) + len(bwd_depth))
+        else:
+            layer_size = len(bwd_queue)
+            for _ in range(layer_size):
+                state = bwd_queue.popleft()
+                metrics.nodes_expanded += 1
+                metrics.explored_order.append(state.bot_pos)
+
+                for action, prev_state, step_cost in env.get_predecessors(state):
+                    metrics.nodes_generated += 1
+                    if prev_state not in bwd_depth:
+                        bwd_next[prev_state] = (state, action.value)
+                        bwd_depth[prev_state] = bwd_depth[state] + 1
+                        bwd_cost[prev_state] = bwd_cost[state] + step_cost
+
+                        if prev_state in fwd_depth:
+                            return _build_meeting_solution(prev_state)
+
+                        bwd_queue.append(prev_state)
+                        metrics.max_frontier_size = max(metrics.max_frontier_size, len(fwd_queue) + len(bwd_queue))
+                        metrics.max_memory_size = max(metrics.max_memory_size, len(fwd_depth) + len(bwd_depth))
+
+    metrics.status_message = "No solution found."
+    return metrics
 
 
 # =============================================================================
