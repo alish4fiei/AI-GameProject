@@ -140,9 +140,90 @@ def iterative_deepening_search(
     max_depth: Optional[int] = None,
     max_expansions: Optional[int] = None,
 ) -> Optional[SearchMetrics]:
-    """TODO: Implement Iterative Deepening Search (IDS)."""
-    raise NotImplementedError
 
+    metrics = SearchMetrics(algorithm_name="IDS")
+    start = env.get_initial_state()
+    if env.is_goal(start):
+        metrics.solved = True
+        return metrics
+
+    min_depth: Dict[DeepCoreState, int] = {start: 0}
+    dead_states: Set[DeepCoreState] = set()
+    limit = 0
+    cutoff_occurred = False
+
+    while max_depth is None or limit <= max_depth:
+        visited_in_iter: Set[DeepCoreState] = {start}
+        cutoff_occurred = False
+
+        stack: List[list] = [[start, 0, 0, None, None, 0, False]]
+
+        while stack:
+            metrics.max_frontier_size = max(metrics.max_frontier_size, len(stack))
+            metrics.max_memory_size = max(metrics.max_memory_size, len(stack) + len(min_depth))
+            frame = stack[-1]
+            state, depth, cost, _, succs, idx, _ = frame
+
+            if succs is None:
+                if depth == limit:
+                    cutoff_occurred = True
+                    frame[6] = True
+                    stack.pop()
+                    if stack:
+                        stack[-1][6] = True
+                    continue
+                if max_expansions is not None and metrics.nodes_expanded >= max_expansions:
+                    metrics.status_message = "Expansion limit reached."
+                    return metrics
+                metrics.nodes_expanded += 1
+                metrics.explored_order.append(state.bot_pos)
+                succs = env.get_successors(state)
+                metrics.nodes_generated += len(succs)
+                frame[4] = succs
+
+            if idx < len(succs):
+                action, next_state, step_cost = succs[idx]
+                frame[5] = idx + 1
+                next_depth = depth + 1
+
+                if next_state in min_depth:
+                    if next_depth > min_depth[next_state] or next_state in dead_states:
+                        continue
+                    if next_state in visited_in_iter:
+                        frame[6] = True
+                        continue
+                else:
+                    min_depth[next_state] = next_depth
+
+                if env.is_goal(next_state):
+                    actions = [f[3] for f in stack[1:]] + [action.value]
+                    metrics.solved = True
+                    metrics.solution_actions = actions
+                    metrics.total_cost = cost + step_cost
+                    return metrics
+
+                visited_in_iter.add(next_state)
+                if next_depth < limit:
+                    stack.append([next_state, next_depth, cost + step_cost, action.value, None, 0, False])
+                else:
+                    cutoff_occurred = True
+                    frame[6] = True
+            else:
+                has_live_child = frame[6]
+                stack.pop()
+                if has_live_child:
+                    if stack:
+                        stack[-1][6] = True
+                else:
+                    dead_states.add(state)
+
+        if not cutoff_occurred:
+            metrics.status_message = "No solution found."
+            return metrics
+        limit += 1
+
+    metrics.status_message = "Depth limit reached." if cutoff_occurred else "No solution found."
+    return metrics
 
 # =============================================================================
 # 3. Bidirectional Search — [STUDENT TODO]
