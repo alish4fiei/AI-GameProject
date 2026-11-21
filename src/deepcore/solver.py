@@ -240,9 +240,57 @@ def bidirectional_search(env: DeepCoreEnv) -> Optional[SearchMetrics]:
 # 4. Uniform Cost Search (UCS) — [STUDENT TODO]
 # =============================================================================
 def uniform_cost_search(env: DeepCoreEnv) -> Optional[SearchMetrics]:
-    """TODO: Implement Uniform Cost Search ordering the priority queue by path cost g(n)."""
-    raise NotImplementedError
 
+    metrics = SearchMetrics(algorithm_name="UCS")
+    start = env.get_initial_state()
+    if env.is_goal(start):
+        metrics.solved = True
+        return metrics
+
+    counter = 0
+
+    frontier: List[Tuple[int, int, DeepCoreState]] = [(0, counter, start)]
+    best_g: Dict[DeepCoreState, int] = {start: 0}
+    parent: Dict[DeepCoreState, Tuple[Optional[DeepCoreState], Optional[str]]] = {start: (None, None)}
+    explored: Set[DeepCoreState] = set()
+
+    while frontier:
+        metrics.max_frontier_size = max(metrics.max_frontier_size, len(frontier))
+        metrics.max_memory_size = max(metrics.max_memory_size, len(frontier) + len(explored))
+
+
+        g_cost, _, state = heapq.heappop(frontier)
+
+
+        if state in explored:
+            continue
+
+        explored.add(state)
+        metrics.nodes_expanded += 1
+        metrics.explored_order.append(state.bot_pos)
+
+
+        if env.is_goal(state):
+            metrics.solved = True
+            metrics.solution_actions = _reconstruct_path(parent, state)
+            metrics.total_cost = g_cost
+            return metrics
+
+        for action, next_state, step_cost in env.get_successors(state):
+            metrics.nodes_generated += 1
+            new_g = g_cost + step_cost
+
+
+            if next_state not in explored and new_g < best_g.get(next_state, math.inf):
+                best_g[next_state] = new_g
+                parent[next_state] = (state, action.value)
+                counter += 1
+                heapq.heappush(frontier, (new_g, counter, next_state))
+                metrics.max_frontier_size = max(metrics.max_frontier_size, len(frontier))
+                metrics.max_memory_size = max(metrics.max_memory_size, len(frontier) + len(explored))
+
+    metrics.status_message = "No solution found."
+    return metrics
 
 # =============================================================================
 # 5. Greedy Best-First Search (GBFS) — [STUDENT TODO]
