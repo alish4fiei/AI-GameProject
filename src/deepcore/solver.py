@@ -395,10 +395,84 @@ def uniform_cost_search(env: DeepCoreEnv) -> Optional[SearchMetrics]:
 # 5. Greedy Best-First Search (GBFS) — [STUDENT TODO]
 # =============================================================================
 def greedy_best_first_search(
-    env: DeepCoreEnv, heuristic: Callable[[DeepCoreState, DeepCoreEnv], float]
+    env: DeepCoreEnv,
+    heuristic: Callable[[DeepCoreState, DeepCoreEnv], float]
 ) -> Optional[SearchMetrics]:
-    """TODO: Implement Greedy Best-First Search ordering the priority queue strictly by h(n)."""
-    raise NotImplementedError
+
+    metrics = SearchMetrics(algorithm_name="GBFS")
+
+    start = env.get_initial_state()
+
+    if env.is_goal(start):
+        metrics.solved = True
+        return metrics
+
+    counter = 0
+
+    frontier = [
+        (heuristic(start, env), counter, 0, start)
+    ]
+
+    best_g = {start: 0}
+
+    expanded_g = {}
+
+    parent = {start: (None, None)}
+
+    while frontier:
+
+        metrics.max_frontier_size = max(
+            metrics.max_frontier_size, len(frontier)
+        )
+
+        state_h, _, g_cost, state = heapq.heappop(frontier)
+
+        if g_cost != best_g.get(state):
+            continue
+
+        if expanded_g.get(state, math.inf) <= g_cost:
+            continue
+
+        expanded_g[state] = g_cost
+
+        metrics.nodes_expanded += 1
+        metrics.explored_order.append(state.bot_pos)
+
+        if env.is_goal(state):
+            metrics.solved = True
+            metrics.solution_actions = _reconstruct_path(parent, state)
+            metrics.total_cost = g_cost
+            return metrics
+
+        for action, next_state, step_cost in env.get_successors(state):
+
+            metrics.nodes_generated += 1
+
+            new_g = g_cost + step_cost
+
+            if new_g < best_g.get(next_state, math.inf):
+
+                best_g[next_state] = new_g
+
+                parent[next_state] = (state, action.value)
+
+                counter += 1
+
+                h_value = heuristic(next_state, env)
+
+                heapq.heappush(
+                    frontier,
+                    (h_value, counter, new_g, next_state)
+                )
+
+        metrics.max_memory_size = max(
+            metrics.max_memory_size,
+            len(frontier) + len(expanded_g)
+        )
+
+    metrics.status_message = "No solution found."
+
+    return metrics
 
 
 # =============================================================================
