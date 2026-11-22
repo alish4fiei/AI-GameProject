@@ -101,59 +101,65 @@ def h1_basic(state: DeepCoreState, env: DeepCoreEnv) -> float:
         lambda u, v: distances.get((u, v), float("inf"))
     )
 
+    cache = getattr(h1_basic, "_surcharge_cache", None)
+
+    if cache is None:
+        cache = {}
+        h1_basic._surcharge_cache = cache
+
     surcharge_distances = {}
 
     for source in terminals:
 
-        dist = {source: 0}
-        queue = deque([source])
+        cache_key = (env, state.rubble, source)
 
-        while queue:
+        dist = cache.get(cache_key)
 
-            current = queue.popleft()
+        if dist is None:
 
-            cr, cc = current
+            dist = {source: 0}
+            queue = deque([source])
 
-            for dr, dc in DIRECTION_DELTAS.values():
+            while queue:
 
-                nxt = (cr + dr, cc + dc)
+                current = queue.popleft()
+                cr, cc = current
 
-                if not env.in_bounds(nxt) or nxt in env.walls:
-                    continue
+                for dr, dc in DIRECTION_DELTAS.values():
 
+                    nxt = (cr + dr, cc + dc)
 
-                step_cost = 0 if nxt in state.rubble else 1
+                    if not env.in_bounds(nxt) or nxt in env.walls:
+                        continue
 
-                new_dist = dist[current] + step_cost
+                    step_cost = 0 if nxt in state.rubble else 1
 
-                if new_dist < dist.get(nxt, float("inf")):
+                    new_dist = dist[current] + step_cost
 
-                    dist[nxt] = new_dist
+                    if new_dist < dist.get(nxt, float("inf")):
 
-                    if step_cost == 0:
-                        queue.appendleft(nxt)
-                    else:
-                        queue.append(nxt)
+                        dist[nxt] = new_dist
+
+                        if step_cost == 0:
+                            queue.appendleft(nxt)
+                        else:
+                            queue.append(nxt)
+
+            cache[cache_key] = dist
 
         surcharge_distances[source] = dist
 
     def surcharge_distance(u, v):
 
-        forward = surcharge_distances[u].get(
-            v, float("inf")
+        return min(
+            surcharge_distances[u].get(v, float("inf")),
+            surcharge_distances[v].get(u, float("inf"))
         )
-
-        backward = surcharge_distances[v].get(
-            u, float("inf")
-        )
-
-        return min(forward, backward)
 
     current_payload_steps = _prim_mst_cost(
         terminals,
         surcharge_distance
     )
-
 
     future_payload_steps = sum(
         surcharge_distances[miner].get(
@@ -181,7 +187,7 @@ def _is_corner_deadlock(pos: Pos, env: DeepCoreEnv) -> bool:
 
 
 def h2_advanced(state: DeepCoreState, env: DeepCoreEnv) -> float:
-    
+
     if env.is_goal(state):
         return 0.0
 
@@ -202,72 +208,77 @@ def h2_advanced(state: DeepCoreState, env: DeepCoreEnv) -> float:
 
     payload_cost = h1_value - wall_mst
 
-    walkable = [
-        (r, c)
-        for r in range(env.rows)
-        for c in range(env.cols)
-        if (r, c) not in env.walls
-    ]
+    cache = getattr(h2_advanced, "_terrain_cache", None)
 
-    weighted_distances = {}
+    if cache is None:
+        cache = {}
+        h2_advanced._terrain_cache = cache
 
-    for source in terminals:
+    all_distances = cache.get(env)
 
-        dist = {source: 0}
+    if all_distances is None:
 
-        unvisited = set(walkable)
+        walkable = [
+            (r, c)
+            for r in range(env.rows)
+            for c in range(env.cols)
+            if (r, c) not in env.walls
+        ]
 
-        while unvisited:
-            current = min(
-                unvisited,
-                key=lambda pos: dist.get(pos, float("inf"))
-            )
+        all_distances = {}
 
-            current_cost = dist.get(current, float("inf"))
+        for source in walkable:
 
-            if current_cost == float("inf"):
-                break
+            dist = {source: 0}
+            unvisited = set(walkable)
 
-            unvisited.remove(current)
+            while unvisited:
 
-            cr, cc = current
+                current = min(
+                    unvisited,
+                    key=lambda p: dist.get(p, float("inf"))
+                )
 
-            for dr, dc in DIRECTION_DELTAS.values():
+                current_cost = dist.get(current, float("inf"))
 
-                nxt = (cr + dr, cc + dc)
+                if current_cost == float("inf"):
+                    break
 
-                if not env.in_bounds(nxt):
-                    continue
+                unvisited.remove(current)
 
-                if nxt in env.walls:
-                    continue
+                cr, cc = current
 
-                if nxt not in unvisited:
-                    continue
+                for dr, dc in DIRECTION_DELTAS.values():
 
-                if nxt in env.sludge:
-                    step_cost = env.COST_SLUDGE
-                else:
-                    step_cost = env.COST_CLEAR_FLOOR
+                    nxt = (cr + dr, cc + dc)
 
-                new_cost = current_cost + step_cost
+                    if not env.in_bounds(nxt):
+                        continue
 
-                if new_cost < dist.get(nxt, float("inf")):
-                    dist[nxt] = new_cost
+                    if nxt in env.walls or nxt not in unvisited:
+                        continue
 
-        weighted_distances[source] = dist
+                    step_cost = (
+                        env.COST_SLUDGE
+                        if nxt in env.sludge
+                        else env.COST_CLEAR_FLOOR
+                    )
+
+                    new_cost = current_cost + step_cost
+
+                    if new_cost < dist.get(nxt, float("inf")):
+                        dist[nxt] = new_cost
+
+            all_distances[source] = dist
+
+        cache[env] = all_distances
 
     def terrain_distance(u, v):
 
-        forward = weighted_distances[u].get(
-            v, float("inf")
+        return min(
+            all_distances[u].get(v, float("inf")),
+            all_distances[v].get(u, float("inf"))
         )
-
-        backward = weighted_distances[v].get(
-            u, float("inf")
-        )
-
-        return min(forward, backward)
 
     weighted_mst = _prim_mst_cost(
         terminals,
@@ -275,4 +286,5 @@ def h2_advanced(state: DeepCoreState, env: DeepCoreEnv) -> float:
     )
 
     h2_value = weighted_mst + payload_cost
+
     return max(h1_value, h2_value)

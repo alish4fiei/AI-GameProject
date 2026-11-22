@@ -676,14 +676,25 @@ def ida_star_search(
         metrics.solved = True
         return metrics
 
-    threshold = heuristic(start, env)
+    heuristic_cache = {}
+
+    def h(state):
+
+        if state not in heuristic_cache:
+
+            heuristic_cache[state] = float(
+                heuristic(state, env)
+            )
+
+        return heuristic_cache[state]
+
+    threshold = h(start)
 
     while True:
 
-        next_threshold = math.inf
+        best_g = {}
 
         path_states = {start}
-
         path_actions = []
 
         solution_actions = None
@@ -693,47 +704,35 @@ def ida_star_search(
 
         def dfs(state, g_cost):
 
-            nonlocal next_threshold
             nonlocal solution_actions
             nonlocal solution_cost
             nonlocal aborted
 
-            f_cost = g_cost + heuristic(state, env)
+            f_cost = g_cost + h(state)
 
             if f_cost > threshold:
+                return f_cost
 
-                next_threshold = min(
-                    next_threshold,
-                    f_cost
-                )
-
-                return False
-            current_depth = len(path_states)
-
-            metrics.max_frontier_size = max(
-                metrics.max_frontier_size,
-                current_depth
-            )
-
-            metrics.max_memory_size = max(
-                metrics.max_memory_size,
-                current_depth
-            )
             if env.is_goal(state):
 
                 solution_actions = path_actions.copy()
-
                 solution_cost = g_cost
 
                 return True
+
+            previous_g = best_g.get(state)
+
+            if previous_g is not None and g_cost >= previous_g:
+                return math.inf
+
+            best_g[state] = g_cost
             if (
                 max_expansions is not None
                 and metrics.nodes_expanded >= max_expansions
             ):
 
                 aborted = True
-
-                return False
+                return math.inf
 
             metrics.nodes_expanded += 1
 
@@ -743,40 +742,51 @@ def ida_star_search(
 
             metrics.nodes_generated += len(successors)
 
+            min_exceeded = math.inf
+
             for action, next_state, step_cost in successors:
 
                 if next_state in path_states:
                     continue
 
                 path_states.add(next_state)
-
                 path_actions.append(action.value)
 
-                found = dfs(
+                result = dfs(
                     next_state,
                     g_cost + step_cost
                 )
 
-                if found:
+                if result is True:
                     return True
-
                 path_actions.pop()
-
                 path_states.remove(next_state)
 
                 if aborted:
-                    return False
+                    return math.inf
 
-            return False
+                min_exceeded = min(
+                    min_exceeded,
+                    result
+                )
 
-        found = dfs(start, 0)
+                metrics.max_frontier_size = max(
+                    metrics.max_frontier_size,
+                    len(path_states)
+                )
 
-        if found:
+                metrics.max_memory_size = max(
+                    metrics.max_memory_size,
+                    len(best_g) + len(path_states)
+                )
+
+            return min_exceeded
+        result = dfs(start, 0)
+
+        if result is True:
 
             metrics.solved = True
-
             metrics.solution_actions = solution_actions
-
             metrics.total_cost = solution_cost
 
             return metrics
@@ -787,13 +797,12 @@ def ida_star_search(
 
             return metrics
 
-        if next_threshold == math.inf:
+        if result == math.inf:
 
             metrics.status_message = "No solution found."
 
             return metrics
-
-        threshold = next_threshold
+        threshold = result
 
 
 # =============================================================================
