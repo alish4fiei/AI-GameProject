@@ -571,10 +571,92 @@ def a_star_search(
 def weighted_a_star_search(
     env: DeepCoreEnv,
     heuristic: Callable[[DeepCoreState, DeepCoreEnv], float],
-    weight: float = 1.5,
+    weight: float = 1.5
 ) -> Optional[SearchMetrics]:
-    """TODO (Bonus): Implement Weighted A* ordering the frontier by f(n) = g(n) + W * h(n)."""
-    raise NotImplementedError
+
+    if not math.isfinite(weight) or weight < 1.0:
+        raise ValueError("Weight must be finite and >= 1.")
+
+    metrics = SearchMetrics(algorithm_name="Weighted A*")
+
+    start = env.get_initial_state()
+
+    if env.is_goal(start):
+        metrics.solved = True
+        return metrics
+
+    counter = 0
+
+    frontier = [
+        (weight * heuristic(start, env), counter, 0, start)
+    ]
+
+    best_g = {start: 0}
+
+    expanded_g = {}
+
+    parent = {start: (None, None)}
+
+    while frontier:
+
+        metrics.max_frontier_size = max(
+            metrics.max_frontier_size, len(frontier)
+        )
+
+        f_cost, _, g_cost, state = heapq.heappop(frontier)
+
+        if g_cost != best_g.get(state):
+            continue
+
+        if expanded_g.get(state, math.inf) <= g_cost:
+            continue
+
+        expanded_g[state] = g_cost
+
+        metrics.nodes_expanded += 1
+        metrics.explored_order.append(state.bot_pos)
+
+        if env.is_goal(state):
+
+            metrics.solved = True
+
+            metrics.solution_actions = _reconstruct_path(parent, state)
+
+            metrics.total_cost = g_cost
+
+            return metrics
+
+        for action, next_state, step_cost in env.get_successors(state):
+
+            metrics.nodes_generated += 1
+
+            new_g = g_cost + step_cost
+
+            if new_g < best_g.get(next_state, math.inf):
+
+                best_g[next_state] = new_g
+
+                parent[next_state] = (state, action.value)
+
+                h_value = heuristic(next_state, env)
+
+                new_f = new_g + weight * h_value
+
+                counter += 1
+
+                heapq.heappush(
+                    frontier,
+                    (new_f, counter, new_g, next_state)
+                )
+
+        metrics.max_memory_size = max(
+            metrics.max_memory_size,
+            len(frontier) + len(expanded_g)
+        )
+
+    metrics.status_message = "No solution found."
+
+    return metrics
 
 
 # =============================================================================
@@ -583,10 +665,135 @@ def weighted_a_star_search(
 def ida_star_search(
     env: DeepCoreEnv,
     heuristic: Callable[[DeepCoreState, DeepCoreEnv], float],
-    max_expansions: Optional[int] = None,
+    max_expansions: Optional[int] = None
 ) -> Optional[SearchMetrics]:
-    """TODO (Bonus): Implement Iterative Deepening A* (IDA*) using f-cost threshold contours."""
-    raise NotImplementedError
+
+    metrics = SearchMetrics(algorithm_name="IDA*")
+
+    start = env.get_initial_state()
+
+    if env.is_goal(start):
+        metrics.solved = True
+        return metrics
+
+    threshold = heuristic(start, env)
+
+    while True:
+
+        next_threshold = math.inf
+
+        path_states = {start}
+
+        path_actions = []
+
+        solution_actions = None
+        solution_cost = 0
+
+        aborted = False
+
+        def dfs(state, g_cost):
+
+            nonlocal next_threshold
+            nonlocal solution_actions
+            nonlocal solution_cost
+            nonlocal aborted
+
+            f_cost = g_cost + heuristic(state, env)
+
+            if f_cost > threshold:
+
+                next_threshold = min(
+                    next_threshold,
+                    f_cost
+                )
+
+                return False
+            current_depth = len(path_states)
+
+            metrics.max_frontier_size = max(
+                metrics.max_frontier_size,
+                current_depth
+            )
+
+            metrics.max_memory_size = max(
+                metrics.max_memory_size,
+                current_depth
+            )
+            if env.is_goal(state):
+
+                solution_actions = path_actions.copy()
+
+                solution_cost = g_cost
+
+                return True
+            if (
+                max_expansions is not None
+                and metrics.nodes_expanded >= max_expansions
+            ):
+
+                aborted = True
+
+                return False
+
+            metrics.nodes_expanded += 1
+
+            metrics.explored_order.append(state.bot_pos)
+
+            successors = env.get_successors(state)
+
+            metrics.nodes_generated += len(successors)
+
+            for action, next_state, step_cost in successors:
+
+                if next_state in path_states:
+                    continue
+
+                path_states.add(next_state)
+
+                path_actions.append(action.value)
+
+                found = dfs(
+                    next_state,
+                    g_cost + step_cost
+                )
+
+                if found:
+                    return True
+
+                path_actions.pop()
+
+                path_states.remove(next_state)
+
+                if aborted:
+                    return False
+
+            return False
+
+        found = dfs(start, 0)
+
+        if found:
+
+            metrics.solved = True
+
+            metrics.solution_actions = solution_actions
+
+            metrics.total_cost = solution_cost
+
+            return metrics
+
+        if aborted:
+
+            metrics.status_message = "Expansion limit reached."
+
+            return metrics
+
+        if next_threshold == math.inf:
+
+            metrics.status_message = "No solution found."
+
+            return metrics
+
+        threshold = next_threshold
 
 
 # =============================================================================
@@ -597,5 +804,383 @@ def sma_star_search(
     heuristic: Callable[[DeepCoreState, DeepCoreEnv], float],
     memory_limit: Optional[int] = None,
 ) -> Optional[SearchMetrics]:
-    """TODO (Bonus): Implement Simplified Memory-Bounded A* (SMA*)."""
-    raise NotImplementedError
+
+    metrics = SearchMetrics(algorithm_name="SMA*")
+
+    if memory_limit is None:
+        memory_limit = 10000
+
+    if not isinstance(memory_limit, int) or isinstance(memory_limit, bool):
+        raise ValueError("Memory limit must be an integer.")
+
+    if memory_limit < 2:
+        raise ValueError("Memory limit must be at least 2.")
+
+    start = env.get_initial_state()
+
+    if env.is_goal(start):
+        metrics.solved = True
+        return metrics
+
+    nodes = {}
+
+    next_id = 1
+
+    root_h = float(heuristic(start, env))
+
+    nodes[0] = {
+        "state": start,
+        "g": 0,
+        "base_f": root_h,
+        "f": root_h,
+        "parent": None,
+        "action": None,
+        "depth": 0,
+        "children": set(),
+        "forgotten": {},
+        "expanded": False,
+        "expanding": False,
+        "dead": False,
+    }
+
+    metrics.max_memory_size = 1
+    metrics.max_frontier_size = 1
+
+    def is_ancestor(node_id, state):
+
+        current = node_id
+
+        while current is not None:
+
+            if nodes[current]["state"] == state:
+                return True
+
+            current = nodes[current]["parent"]
+
+        return False
+
+    def get_leaves():
+
+        result = []
+
+        for node_id, node in nodes.items():
+
+            if node["dead"] or node["expanding"]:
+                continue
+
+            if node["children"]:
+                continue
+
+            if not node["expanded"] or node["forgotten"]:
+                result.append(node_id)
+
+        return result
+
+    def refresh_up(node_id):
+
+        current = node_id
+
+        while current is not None and current in nodes:
+
+            node = nodes[current]
+
+            estimates = [
+                nodes[child]["f"]
+                for child in node["children"]
+                if child in nodes
+            ]
+
+            estimates.extend(node["forgotten"].values())
+
+            if estimates:
+
+                node["f"] = max(
+                    node["f"],
+                    node["base_f"],
+                    min(estimates)
+                )
+
+                current = node["parent"]
+
+            elif node["expanded"] and not node["expanding"]:
+
+                node["dead"] = True
+
+                parent_id = node["parent"]
+
+                if parent_id is None:
+                    return
+
+                nodes[parent_id]["children"].discard(current)
+
+                del nodes[current]
+
+                current = parent_id
+
+            else:
+                return
+
+    def remove_leaf(node_id, remember=True):
+
+        node = nodes[node_id]
+
+        parent_id = node["parent"]
+
+        if parent_id is None:
+            node["dead"] = True
+            return
+
+        parent = nodes[parent_id]
+
+        parent["children"].discard(node_id)
+
+        if remember:
+
+            action = node["action"]
+
+            parent["forgotten"][action] = max(
+                parent["forgotten"].get(action, float("-inf")),
+                node["f"]
+            )
+
+        del nodes[node_id]
+
+        refresh_up(parent_id)
+
+    def enforce_memory_limit():
+
+        while len(nodes) > memory_limit:
+
+            leaves = get_leaves()
+
+            if not leaves:
+                break
+
+            worst_leaf = max(
+                leaves,
+                key=lambda n: (
+                    nodes[n]["f"],
+                    -nodes[n]["depth"],
+                    n
+                )
+            )
+
+            remove_leaf(worst_leaf, remember=True)
+
+        metrics.max_memory_size = max(
+            metrics.max_memory_size,
+            len(nodes)
+        )
+
+    while True:
+
+        leaves = get_leaves()
+
+        if not leaves:
+            break
+
+        metrics.max_frontier_size = max(
+            metrics.max_frontier_size,
+            len(leaves)
+        )
+
+        metrics.max_memory_size = max(
+            metrics.max_memory_size,
+            len(nodes)
+        )
+
+        best_node_id = min(
+            leaves,
+            key=lambda n: (
+                nodes[n]["f"],
+                -nodes[n]["depth"],
+                n
+            )
+        )
+
+        node = nodes[best_node_id]
+
+        state = node["state"]
+
+        if env.is_goal(state):
+
+            actions = []
+
+            current = best_node_id
+
+            while nodes[current]["parent"] is not None:
+
+                actions.append(
+                    nodes[current]["action"]
+                )
+
+                current = nodes[current]["parent"]
+
+            actions.reverse()
+
+            metrics.solved = True
+
+            metrics.solution_actions = actions
+
+            metrics.total_cost = node["g"]
+
+            return metrics
+
+        if len(nodes) >= memory_limit and len(leaves) == 1:
+
+            remove_leaf(best_node_id, remember=False)
+
+            continue
+
+        if not node["expanded"]:
+
+            node["expanded"] = True
+
+            node["expanding"] = True
+
+            successors = env.get_successors(state)
+
+            metrics.nodes_expanded += 1
+
+            metrics.nodes_generated += len(successors)
+
+            candidates = []
+
+            for action, next_state, step_cost in successors:
+
+                if is_ancestor(best_node_id, next_state):
+                    continue
+
+                new_g = node["g"] + step_cost
+
+                new_h = float(
+                    heuristic(next_state, env)
+                )
+
+                new_f = max(
+                    node["f"],
+                    new_g + new_h
+                )
+
+                candidates.append(
+                    (new_f, action.value, new_g, next_state)
+                )
+
+            candidates.sort(key=lambda x: (x[0], x[1]))
+
+            for new_f, action_name, new_g, next_state in candidates:
+
+                child_id = next_id
+                next_id += 1
+
+                nodes[child_id] = {
+                    "state": next_state,
+                    "g": new_g,
+                    "base_f": new_g + float(
+                        heuristic(next_state, env)
+                    ),
+                    "f": new_f,
+                    "parent": best_node_id,
+                    "action": action_name,
+                    "depth": node["depth"] + 1,
+                    "children": set(),
+                    "forgotten": {},
+                    "expanded": False,
+                    "expanding": False,
+                    "dead": False,
+                }
+
+                node["children"].add(child_id)
+
+                enforce_memory_limit()
+
+            if best_node_id in nodes:
+
+                nodes[best_node_id]["expanding"] = False
+
+                refresh_up(best_node_id)
+
+        else:
+
+            action_name, saved_f = min(
+                node["forgotten"].items(),
+                key=lambda item: (item[1], item[0])
+            )
+
+            del node["forgotten"][action_name]
+
+            successors = env.get_successors(state)
+
+            metrics.nodes_expanded += 1
+
+            metrics.nodes_generated += len(successors)
+
+            restored = None
+
+            for action, next_state, step_cost in successors:
+
+                if action.value == action_name:
+
+                    if not is_ancestor(best_node_id, next_state):
+
+                        restored = (
+                            action,
+                            next_state,
+                            step_cost
+                        )
+
+                    break
+
+            if restored is None:
+
+                refresh_up(best_node_id)
+
+                continue
+
+            action, next_state, step_cost = restored
+
+            new_g = node["g"] + step_cost
+
+            new_h = float(
+                heuristic(next_state, env)
+            )
+
+            new_f = max(
+                node["f"],
+                saved_f,
+                new_g + new_h
+            )
+
+            child_id = next_id
+            next_id += 1
+
+            node["expanding"] = True
+
+            nodes[child_id] = {
+                "state": next_state,
+                "g": new_g,
+                "base_f": new_g + new_h,
+                "f": new_f,
+                "parent": best_node_id,
+                "action": action.value,
+                "depth": node["depth"] + 1,
+                "children": set(),
+                "forgotten": {},
+                "expanded": False,
+                "expanding": False,
+                "dead": False,
+            }
+
+            node["children"].add(child_id)
+
+            enforce_memory_limit()
+
+            if best_node_id in nodes:
+
+                nodes[best_node_id]["expanding"] = False
+
+                refresh_up(best_node_id)
+
+    metrics.status_message = "No solution found within the memory limit."
+
+    return metrics
