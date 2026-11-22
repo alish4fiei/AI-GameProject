@@ -10,6 +10,7 @@ from typing import Dict, List, Tuple
 from collections import deque
 from .environment import DeepCoreEnv, DIRECTION_DELTAS
 from .state import DeepCoreState, Pos
+import heapq
 
 # Cache wall-aware shortest path distances per environment instance
 _WALL_DIST_CACHE: Dict[int, Dict[Tuple[Pos, Pos], int]] = {}
@@ -85,8 +86,94 @@ def h_naive_manhattan(state: DeepCoreState, env: DeepCoreEnv) -> float:
 
 
 def h1_basic(state: DeepCoreState, env: DeepCoreEnv) -> float:
-    """TODO: Build an admissible MST-plus-payload lower bound; return 0 at a goal."""
-    raise NotImplementedError
+
+    if env.is_goal(state):
+        return 0.0
+
+    distances = _get_wall_aware_distances(env)
+
+    terminals = list(dict.fromkeys(
+        [state.bot_pos, *state.miners, env.elevator_pos]
+    ))
+
+    mst_cost = _prim_mst_cost(
+        terminals,
+        lambda u, v: distances.get((u, v), float("inf"))
+    )
+
+    cache = getattr(h1_basic, "_surcharge_cache", None)
+
+    if cache is None:
+        cache = {}
+        h1_basic._surcharge_cache = cache
+
+    surcharge_distances = {}
+
+    for source in terminals:
+
+        cache_key = (env, state.rubble, source)
+
+        dist = cache.get(cache_key)
+
+        if dist is None:
+
+            dist = {source: 0}
+            queue = deque([source])
+
+            while queue:
+
+                current = queue.popleft()
+                cr, cc = current
+
+                for dr, dc in DIRECTION_DELTAS.values():
+
+                    nxt = (cr + dr, cc + dc)
+
+                    if not env.in_bounds(nxt) or nxt in env.walls:
+                        continue
+
+                    step_cost = 0 if nxt in state.rubble else 1
+
+                    new_dist = dist[current] + step_cost
+
+                    if new_dist < dist.get(nxt, float("inf")):
+
+                        dist[nxt] = new_dist
+
+                        if step_cost == 0:
+                            queue.appendleft(nxt)
+                        else:
+                            queue.append(nxt)
+
+            cache[cache_key] = dist
+
+        surcharge_distances[source] = dist
+
+    def surcharge_distance(u, v):
+
+        return min(
+            surcharge_distances[u].get(v, float("inf")),
+            surcharge_distances[v].get(u, float("inf"))
+        )
+
+    current_payload_steps = _prim_mst_cost(
+        terminals,
+        surcharge_distance
+    )
+
+    future_payload_steps = sum(
+        surcharge_distances[miner].get(
+            env.elevator_pos, float("inf")
+        )
+        for miner in state.miners
+    )
+
+    payload_cost = env.PAYLOAD_SURCHARGE * (
+        state.carried * current_payload_steps
+        + future_payload_steps
+    )
+
+    return mst_cost + payload_cost
 
 
 def _is_corner_deadlock(pos: Pos, env: DeepCoreEnv) -> bool:
@@ -100,5 +187,104 @@ def _is_corner_deadlock(pos: Pos, env: DeepCoreEnv) -> bool:
 
 
 def h2_advanced(state: DeepCoreState, env: DeepCoreEnv) -> float:
-    """TODO: Strengthen H1 while preserving admissibility and dominance."""
-    raise NotImplementedError
+
+    if env.is_goal(state):
+        return 0.0
+
+    terminals = list(dict.fromkeys(
+        [state.bot_pos, *state.miners, env.elevator_pos]
+    ))
+
+    h1_value = h1_basic(state, env)
+
+    wall_distances = _get_wall_aware_distances(env)
+
+    wall_mst = _prim_mst_cost(
+        terminals,
+        lambda u, v: wall_distances.get(
+            (u, v), float("inf")
+        )
+    )
+
+    payload_cost = h1_value - wall_mst
+
+    cache = getattr(h2_advanced, "_terrain_cache", None)
+
+    if cache is None:
+        cache = {}
+        h2_advanced._terrain_cache = cache
+
+    all_distances = cache.get(env)
+
+    if all_distances is None:
+
+        walkable = [
+            (r, c)
+            for r in range(env.rows)
+            for c in range(env.cols)
+            if (r, c) not in env.walls
+        ]
+
+        all_distances = {}
+
+        for source in walkable:
+
+            dist = {source: 0}
+            unvisited = set(walkable)
+
+            while unvisited:
+
+                current = min(
+                    unvisited,
+                    key=lambda p: dist.get(p, float("inf"))
+                )
+
+                current_cost = dist.get(current, float("inf"))
+
+                if current_cost == float("inf"):
+                    break
+
+                unvisited.remove(current)
+
+                cr, cc = current
+
+                for dr, dc in DIRECTION_DELTAS.values():
+
+                    nxt = (cr + dr, cc + dc)
+
+                    if not env.in_bounds(nxt):
+                        continue
+
+                    if nxt in env.walls or nxt not in unvisited:
+                        continue
+
+                    step_cost = (
+                        env.COST_SLUDGE
+                        if nxt in env.sludge
+                        else env.COST_CLEAR_FLOOR
+                    )
+
+                    new_cost = current_cost + step_cost
+
+                    if new_cost < dist.get(nxt, float("inf")):
+                        dist[nxt] = new_cost
+
+            all_distances[source] = dist
+
+        cache[env] = all_distances
+
+    def terrain_distance(u, v):
+
+        return min(
+            all_distances[u].get(v, float("inf")),
+            all_distances[v].get(u, float("inf"))
+        )
+
+    weighted_mst = _prim_mst_cost(
+        terminals,
+        terrain_distance
+    )
+
+    h2_value = weighted_mst + payload_cost
+
+    return max(h1_value, h2_value)
